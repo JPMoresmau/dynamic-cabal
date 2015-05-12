@@ -7,6 +7,7 @@ import           System.Directory
 import           System.FilePath
 import           Test.Tasty.HUnit
 import           Test.Tasty.TH
+import qualified Config
 
 case_targets :: Assertion
 case_targets = do
@@ -26,7 +27,7 @@ case_targets = do
   assertEqual "source directories" (sort $ map sourceDirs tgs) $ sort $ map return ["src", "tests", "tests"]
   assertBool "ghc options" $ all (elem "-Wall" . ghcOptions)  tgs
   assertBool "no extensions (except TH)" $ all (not . any ("TemplateHaskell" /=) . extensions) tgs
-  assertBool  "everything buildable" $ all buildable tgs
+  assertBool "everything buildable" $ all buildable tgs
   assertBool "no cpp options" $ all (null . cppOptions) tgs
 
 case_packageDBs :: Assertion
@@ -37,21 +38,20 @@ case_packageDBs = do
 -- | test running raw query
 case_raw :: Assertion
 case_raw = do
-  s<-src
-  m::DM.Map String [String]<-runRawQuery s "dist/setup-config"
-  assertEqual "map size" 3 (DM.size m)
-  -- print m
+  s <- src
+  m :: DM.Map String [String] <- runRawQuery s "dist/setup-config"
+  assertEqual "number of build targets" 3 (DM.size m)
 
 -- | the raw query source code
 src :: IO String
-src=do
-  setupConfig' <- canonicalizePath "dist/setup-config"
-  cv <- getCabalVersion setupConfig'
-  let optStr1 | cv >= Version [1,19,0] [] ="(compiler,_ ,_)<-configure V.normal Nothing Nothing defaultProgramDb"
+src = do
+  distPrefix <- canonicalizePath "dist"
+  cv <- getCabalVersion (distPrefix ++ "/setup-config")
+  let optStr1 | cv >= Version [1,19,0] [] ="(compiler,_ ,_) <- configure V.silent Nothing Nothing defaultProgramDb"
               | otherwise =""
-  let optStr | cv >= Version [1,19,0] [] ="renderGhcOptions compiler $ componentGhcOptions V.silent lbi b clbi \"dist/build\""
-             | cv >= Version [1,15,0] [] ="renderGhcOptions ((fst $ head $ readP_to_S  parseVersion  \"7.6.3\") :: Version) $ componentGhcOptions V.silent lbi b clbi \"dist/build\""
-             | otherwise                 ="ghcOptions lbi b clbi fp"
+  let optStr | cv >= Version [1,19,0] [] ="renderGhcOptions compiler $ componentGhcOptions V.silent lbi b clbi " ++ show distPrefix
+             | cv >= Version [1,15,0] [] ="renderGhcOptions ((fst $ head $ readP_to_S  parseVersion " ++ show Config.cProjectVersion ++ ") :: Version) $ componentGhcOptions V.silent lbi b clbi \"dist/build\""
+             | otherwise                 ="ghcOptions lbi b clbi \"dist/build\""
   return $ unlines [
     "module DynamicCabalQuery where"
     ,"import Distribution.PackageDescription"
@@ -70,19 +70,18 @@ src=do
     ,""
     ,"result :: IO (DM.Map String [String])"
     ,"result=do"
-    ,"Just lbi<-maybeGetPersistBuildConfig \""++takeDirectory setupConfig' ++"\""
+    ,"Just lbi<-maybeGetPersistBuildConfig \""++distPrefix ++"\""
     ,"let pkg=localPkgDescr lbi"
     ,"r<-newIORef DM.empty"
     , optStr1
     ,(if cv >= Version [1,18,0] [] then "withAllComponentsInBuildOrder" else "withComponentsLBI") ++ " pkg lbi (\\c clbi->do"
     ,"       let b=foldComponent libBuildInfo buildInfo testBuildInfo benchmarkBuildInfo c"
-    ,"       let opts=" ++ optStr
+    ,"       let opts=" ++ optStr ++ "::[String]"
     ,"       let n=foldComponent (const \"\") exeName testName benchmarkName c"
     ,"       modifyIORef r (DM.insert n opts)"
     ,"       return ()"
     ,"       )"
     ,"readIORef r" ]
-
 
 
 main :: IO ()

@@ -1,7 +1,6 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -159,26 +158,16 @@ withTempWorkingDir act = do
   setCurrentDirectory pwd
   res <$ removeDirectoryRecursive tmp
 
--- | Declare useful functions for binary reading
-fmap concat $ mapM declareFunction [
-  mkName "Data.ByteString.Lazy.readFile"
-  , mkName "Data.ByteString.Lazy.Char8.dropWhile"
-  , mkName "Data.ByteString.Lazy.tail"
-  , mkName "Data.Binary.decode"
-  ]
+getConfigStateFile :: ExpG (FilePath -> IO LocalBuildInfo)
+getConfigStateFile = useValue "Distribution.Simple.Configure" $ Ident "getConfigStateFile"
 
 generateSource :: Selector LocalBuildInfo o -> String -> FilePath -> Version -> IO String
 generateSource (Selector s) modName setupConfig version = 
   return $ flip generateModule modName $ do
-    getLBI <- if version < Version [1,22,0] []
-                then -- read via Read instance
-                  addDecl (Ident "getLBI") $
-                               applyE fmap' (read' <>. unlines' <>. applyE drop' 1 <>. lines' :: ExpG (String -> LocalBuildInfo))
-                           <>$ applyE Language.Haskell.Generate.readFile' (expr setupConfig)
-                else -- read via Binary Instance
-                  addDecl (Ident "getLBI") $
-                               applyE fmap' (decode' <>. tail' <>. applyE dropWhile' (applyE notequal' (expr '\n')) :: ExpG (Data.ByteString.Lazy.ByteString -> LocalBuildInfo) )
-                           <>$ applyE Distribution.Client.Dynamic.Query.readFile' (expr setupConfig)
+    getLBI <- addDecl (Ident "getLBI") $
+      if version < Version [1,21] []
+      then applyE fmap' (read' <>. unlines' <>. applyE drop' 1 <>. lines' :: ExpG (String -> LocalBuildInfo)) <>$ applyE readFile' (expr setupConfig)
+      else getConfigStateFile <>$ expr setupConfig
     result <- addDecl (Ident "result") $ applyE fmap' (s version) <>$ expr getLBI
     return $ Just [exportFun result]
 
@@ -208,10 +197,16 @@ runRawQuery' s setupConfig post = do
     writeFile "DynamicCabalQuery.hs" s
     GHC.runGhc (Just GHC.Paths.libdir) $ do
       dflags <- GHC.getSessionDynFlags
+      let cabalPkg = "Cabal-" ++ showVersion version
+#if __GLASGOW_HASKELL__ >= 709
+      let cabalFlag = DynFlags.ExposePackage (DynFlags.PackageArg cabalPkg) (DynFlags.ModRenaming True [])
+#else
+      let cabalFlag = DynFlags.ExposePackage cabalPkg
+#endif
       void $ GHC.setSessionDynFlags $ dflags
              { GHC.ghcLink = GHC.LinkInMemory
              , GHC.hscTarget = GHC.HscInterpreted
-             , GHC.packageFlags = [DynFlags.ExposePackage $ "Cabal-" ++ showVersion version]
+             , GHC.packageFlags = [cabalFlag]
              , GHC.ctxtStkDepth = 1000
              }
       dflags' <- GHC.getSessionDynFlags

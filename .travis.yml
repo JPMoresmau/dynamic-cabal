@@ -1,18 +1,28 @@
 env:
- - GHCVER=7.4.2 CABALVER=1.16
- - GHCVER=7.6.3 CABALVER=1.18
- - GHCVER=7.8.3 CABALVER=1.20
+ - GHCVER=7.4.2 CABALVER=1.16 CABALFLAGS=""
+ - GHCVER=7.6.3 CABALVER=1.18 CABALFLAGS=""
+ - GHCVER=7.8.3 CABALVER=1.20 CABALFLAGS="--enable-shared --enable-executable-dynamic"
+ - GHCVER=7.8.4 CABALVER=1.22 CABALFLAGS="--enable-shared --enable-executable-dynamic --constraint mtl<2.2"
+ - GHCVER=7.10.1 CABALVER=1.22 CABALFLAGS="--enable-shared --enable-executable-dynamic"
 
 before_install:
  - sudo add-apt-repository -y ppa:hvr/ghc
- - sudo apt-get update
+ - travis_retry sudo apt-get update
  - sudo apt-get install cabal-install-$CABALVER ghc-$GHCVER hlint
  - cabal-$CABALVER update
- - cabal-$CABALVER install happy -j
  - export PATH=/opt/ghc/$GHCVER/bin:~/.cabal/bin:$PATH
 
+ # The cabal-install packages from hvr's ppa are outdated for cabal 1.22
+ - |
+   if [ "$CABALVER" = "1.22" ]; then
+     cabal-$CABALVER install cabal-install $CABALFLAGS --constraint="Cabal ==$CABALVER.*" --constraint="cabal-install ==$CABALVER.*"
+   else
+     export PATH=/opt/cabal/$CABALVER/bin:$PATH
+   fi
+ - cabal install happy $CABALFLAGS -j
+
 install:
- - cabal-$CABALVER install --only-dependencies --enable-tests --enable-benchmarks -j
+ - cabal install --only-dependencies --enable-tests $CABALFLAGS --enable-benchmarks -j
 
 script:
  - travis/script.sh
